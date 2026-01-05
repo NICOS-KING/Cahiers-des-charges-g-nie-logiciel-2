@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Kongane Master - Jeu de stratégie traditionnel à deux joueurs">
+    <meta name="author" content="Votre Nom">
+    <title>Kongane Master - Jeu de Stratégie</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+    
+    <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        /* Responsive pour mobile */
+        @media (max-width: 640px) {
+            .case-mobile {
+                padding: 0.5rem !important;
+            }
+            .pion-mobile {
+                width: 0.5rem !important;
+                height: 0.5rem !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- React depuis CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // ==================== CLASSES DU JEU ====================
+        
+        class Case {
+            constructor(index, owner) {
+                this.index = index;
+                this.owner = owner;
+                this.pions = 4;
+                this.originalOwner = owner;
+            }
+
+            addPion() { this.pions++; }
+            removePions() {
+                const captured = this.pions;
+                this.pions = 0;
+                return captured;
+            }
+            isFull() { return this.pions === 4; }
+            isEmpty() { return this.pions === 0; }
+            changeOwner(newOwner) { this.owner = newOwner; }
+        }
+
+        class Board {
+            constructor() {
+                this.cases = this.initializeBoard();
+            }
+
+            initializeBoard() {
+                const cases = [];
+                for (let i = 0; i < 6; i++) {
+                    cases.push(new Case(i, 'YELLOW'));
+                }
+                for (let i = 6; i < 12; i++) {
+                    cases.push(new Case(i, 'RED'));
+                }
+                return cases;
+            }
+
+            getCase(index) { return this.cases[index]; }
+            
+            getTotalPionsForPlayer(color) {
+                const start = color === 'YELLOW' ? 0 : 6;
+                const end = start + 6;
+                return this.cases.slice(start, end).reduce((sum, c) => sum + c.pions, 0);
+            }
+            
+            getOwnedCasesCount(color) {
+                return this.cases.filter(c => c.owner === color).length;
+            }
+        }
+
+        class Player {
+            constructor(id, color, name) {
+                this.id = id;
+                this.color = color;
+                this.name = name;
+                this.capturedPions = 0;
+            }
+
+            addCapturedPions(count) { this.capturedPions += count; }
+            
+            getLineIndices() {
+                return this.color === 'YELLOW' ? [0, 1, 2, 3, 4, 5] : [6, 7, 8, 9, 10, 11];
+            }
+        }
+
+        class Game {
+            constructor() {
+                this.board = new Board();
+                this.player1 = new Player(1, 'YELLOW', 'Joueur 1');
+                this.player2 = new Player(2, 'RED', 'Joueur 2');
+                this.currentPlayer = this.player1;
+                this.gamePhase = 'NORMAL';
+                this.gameState = 'PLAYING';
+                this.moveHistory = [];
+            }
+
+            saveState() {
+                return {
+                    board: this.board.cases.map(c => ({
+                        index: c.index,
+                        owner: c.owner,
+                        pions: c.pions,
+                        originalOwner: c.originalOwner
+                    })),
+                    player1Captured: this.player1.capturedPions,
+                    player2Captured: this.player2.capturedPions,
+                    currentPlayer: this.currentPlayer.id,
+                    gamePhase: this.gamePhase,
+                    gameState: this.gameState
+                };
+            }
+
+            restoreState(state) {
+                state.board.forEach((caseData, i) => {
+                    const caseObj = this.board.cases[i];
+                    caseObj.owner = caseData.owner;
+                    caseObj.pions = caseData.pions;
+                    caseObj.originalOwner = caseData.originalOwner;
+                });
+                this.player1.capturedPions = state.player1Captured;
+                this.player2.capturedPions = state.player2Captured;
+                this.currentPlayer = state.currentPlayer === 1 ? this.player1 : this.player2;
+                this.gamePhase = state.gamePhase;
+                this.gameState = state.gameState;
+            }
+
+            isValidMove(caseIndex) {
+                const selectedCase = this.board.getCase(caseIndex);
+                const playerIndices = this.currentPlayer.getLineIndices();
+                
+                if (!playerIndices.includes(caseIndex)) return false;
+                if (selectedCase.isEmpty()) return false;
+                
+                return true;
+            }
+
+            playMove(caseIndex) {
+                if (!this.isValidMove(caseIndex)) {
+                    return { success: false, error: 'Coup invalide' };
+                }
+
+                this.moveHistory.push(this.saveState());
+
+                const selectedCase = this.board.getCase(caseIndex);
+                let pionsInHand = selectedCase.removePions();
+                let currentIndex = caseIndex;
+                let lastIndex = caseIndex;
+
+                while (pionsInHand > 0) {
+                    currentIndex = (currentIndex + 1) % 12;
+                    const currentCase = this.board.getCase(currentIndex);
+                    
+                    currentCase.addPion();
+                    pionsInHand--;
+                    lastIndex = currentIndex;
+
+                    if (currentCase.isFull() && pionsInHand === 0) {
+                        const caseOwner = currentIndex < 6 ? 'YELLOW' : 'RED';
+                        
+                        if (caseOwner === this.currentPlayer.color) {
+                            pionsInHand = currentCase.removePions();
+                            this.currentPlayer.addCapturedPions(4);
+                        }
+                    }
+                }
+
+                const lastCase = this.board.getCase(lastIndex);
+                if (lastCase.pions === 1 || !lastCase.isFull()) {
+                    this.switchPlayer();
+                }
+
+                const winner = this.checkVictory();
+                if (winner) {
+                    this.gameState = 'FINISHED';
+                    return { success: true, winner: winner };
+                }
+
+                this.checkPhaseTransition();
+                return { success: true };
+            }
+
+            undoMove() {
+                if (this.moveHistory.length === 0) return false;
+                const previousState = this.moveHistory.pop();
+                this.restoreState(previousState);
+                return true;
+            }
+
+            switchPlayer() {
+                this.currentPlayer = this.currentPlayer === this.player1 ? this.player2 : this.player1;
+            }
+
+            checkPhaseTransition() {
+                const totalPions = this.board.getTotalPionsForPlayer(this.currentPlayer.color);
+                
+                if (totalPions === 4 && this.gamePhase === 'NORMAL') {
+                    this.gamePhase = 'REDISTRIBUTION';
+                    this.startRedistributionPhase();
+                }
+            }
+
+            startRedistributionPhase() {
+                const playerIndices = this.currentPlayer.getLineIndices();
+                let totalPions = 0;
+                
+                playerIndices.forEach(i => {
+                    totalPions += this.board.getCase(i).removePions();
+                });
+
+                let currentIndex = 0;
+                
+                while (totalPions > 0) {
+                    const caseIndex = playerIndices[currentIndex % 6];
+                    const caseToFill = this.board.getCase(caseIndex);
+                    
+                    while (caseToFill.pions < 4 && totalPions > 0) {
+                        caseToFill.addPion();
+                        totalPions--;
+                    }
+                    
+                    currentIndex++;
+                    
+                    if (currentIndex >= 6 && totalPions > 0) {
+                        const opponentIndices = this.currentPlayer === this.player1 
+                            ? this.player2.getLineIndices() 
+                            : this.player1.getLineIndices();
+                            
+                        const conquestIndex = opponentIndices[(currentIndex - 6) % 6];
+                        const conquestCase = this.board.getCase(conquestIndex);
+                        
+                        conquestCase.changeOwner(this.currentPlayer.color);
+                        
+                        while (conquestCase.pions < 4 && totalPions > 0) {
+                            conquestCase.addPion();
+                            totalPions--;
+                        }
+                    }
+                }
+            }
+
+            checkVictory() {
+                const player1Cases = this.board.getOwnedCasesCount('YELLOW');
+                const player2Cases = this.board.getOwnedCasesCount('RED');
+                
+                if (player1Cases === 12) return this.player1;
+                if (player2Cases === 12) return this.player2;
+
+                const player1Pions = this.board.getTotalPionsForPlayer('YELLOW');
+                const player2Pions = this.board.getTotalPionsForPlayer('RED');
+                
+                if (player2Pions === 0 && player1Pions > 0) return this.player1;
+                if (player1Pions === 0 && player2Pions > 0) return this.player2;
+
+                return null;
+            }
+
+            reset() {
+                this.board = new Board();
+                this.player1 = new Player(1, 'YELLOW', 'Joueur 1');
+                this.player2 = new Player(2, 'RED', 'Joueur 2');
+                this.currentPlayer = this.player1;
+                this.gamePhase = 'NORMAL';
+                this.gameState = 'PLAYING';
+                this.moveHistory = [];
+            }
+        }
+
+        // ==================== COMPOSANT PRINCIPAL ====================
+
+        function KonganeMaster() {
+            const [game, setGame] = useState(new Game());
+            const [message, setMessage] = useState('');
+            const [winner, setWinner] = useState(null);
+            const [stats, setStats] = useState(() => {
+                const saved = localStorage.getItem('kongane-stats');
+                return saved ? JSON.parse(saved) : { 
+                    player1Wins: 0, 
+                    player2Wins: 0, 
+                    totalGames: 0 
+                };
+            });
+
+            const handleCaseClick = (index) => {
+                if (winner) return;
+
+                const result = game.playMove(index);
+                
+                if (!result.success) {
+                    setMessage(result.error);
+                    setTimeout(() => setMessage(''), 2000);
+                    return;
+                }
+
+                if (result.winner) {
+                    setWinner(result.winner);
+                    setMessage(`🎉 ${result.winner.name} a gagné !`);
+                    
+                    const newStats = {...stats};
+                    newStats.totalGames++;
+                    if (result.winner === game.player1) {
+                        newStats.player1Wins++;
+                    } else {
+                        newStats.player2Wins++;
+                    }
+                    setStats(newStats);
+                    localStorage.setItem('kongane-stats', JSON.stringify(newStats));
+                }
+
+                setGame({...game});
+            };
+
+            const handleUndo = () => {
+                if (game.undoMove()) {
+                    setGame({...game});
+                    setMessage('⏮️ Coup annulé');
+                    setTimeout(() => setMessage(''), 2000);
+                }
+            };
+
+            const resetGame = () => {
+                game.reset();
+                setGame({...game});
+                setMessage('');
+                setWinner(null);
+            };
+
+            const getCaseColor = (caseObj) => {
+                return caseObj.owner === 'YELLOW' ? 'bg-yellow-400' : 'bg-red-500';
+            };
+
+            const isClickable = (index) => {
+                if (winner) return false;
+                return game.isValidMove(index);
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-purple-800 p-4 sm:p-8">
+                    <div className="max-w-5xl mx-auto">
+                        {/* Header */}
+                        <div className="text-center mb-6">
+                            <h1 className="text-3xl sm:text-5xl font-bold text-white mb-2">
+                                🏆 KONGANE MASTER 🏆
+                            </h1>
+                            <p className="text-blue-200 text-sm sm:text-lg">Jeu de stratégie à deux joueurs</p>
+                        </div>
+
+                        {/* Score Panel */}
+                        <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 sm:p-6 mb-4 sm:mb-6 border border-white/20">
+                            <div className="grid grid-cols-2 gap-4 sm:gap-8">
+                                <div className={`text-center p-3 sm:p-4 rounded-lg ${
+                                    game.currentPlayer === game.player1 
+                                        ? 'bg-yellow-400/30 ring-2 sm:ring-4 ring-yellow-400' 
+                                        : 'bg-yellow-400/10'
+                                }`}>
+                                    <div className="text-lg sm:text-2xl font-bold text-yellow-300">
+                                        {game.player1.name}
+                                    </div>
+                                    <div className="text-2xl sm:text-4xl font-bold text-white mt-1 sm:mt-2">
+                                        {game.player1.capturedPions}
+                                    </div>
+                                    <div className="text-xs sm:text-sm text-yellow-200">pions capturés</div>
+                                </div>
+                                <div className={`text-center p-3 sm:p-4 rounded-lg ${
+                                    game.currentPlayer === game.player2 
+                                        ? 'bg-red-500/30 ring-2 sm:ring-4 ring-red-500' 
+                                        : 'bg-red-500/10'
+                                }`}>
+                                    <div className="text-lg sm:text-2xl font-bold text-red-300">
+                                        {game.player2.name}
+                                    </div>
+                                    <div className="text-2xl sm:text-4xl font-bold text-white mt-1 sm:mt-2">
+                                        {game.player2.capturedPions}
+                                    </div>
+                                    <div className="text-xs sm:text-sm text-red-200">pions capturés</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Message */}
+                        {message && (
+                            <div className={`mb-4 p-3 sm:p-4 rounded-lg text-center text-base sm:text-xl font-bold ${
+                                winner ? 'bg-green-500' : 'bg-red-500'
+                            } text-white`}>
+                                {message}
+                            </div>
+                        )}
+
+                        {/* Game Board */}
+                        <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 sm:p-8 border border-white/20">
+                            {/* Ligne Jaune */}
+                            <div className="grid grid-cols-6 gap-1 sm:gap-3 mb-1 sm:mb-3">
+                                {[0, 1, 2, 3, 4, 5].map((index) => {
+                                    const caseObj = game.board.getCase(index);
+                                    const clickable = isClickable(index);
+                                    
+                                    return (
+                                        <div
+                                            key={index}
+                                            onClick={() => clickable && handleCaseClick(index)}
+                                            className={`
+                                                ${getCaseColor(caseObj)}
+                                                rounded-lg p-2 sm:p-4 case-mobile aspect-square flex flex-col items-center justify-center
+                                                border-2 sm:border-4 border-white/30 shadow-lg
+                                                transition-all duration-200
+                                                ${clickable ? 'cursor-pointer hover:scale-105 active:scale-95' : 'opacity-70'}
+                                            `}
+                                        >
+                                            <div className="text-xl sm:text-3xl font-bold text-white mb-0 sm:mb-1">
+                                                {caseObj.pions}
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-0.5 sm:gap-1">
+                                                {[...Array(Math.min(4, caseObj.pions))].map((_, i) => (
+                                                    <div key={i} className="w-2 h-2 sm:w-3 sm:h-3 pion-mobile bg-white rounded-full shadow"></div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Ligne Rouge */}
+                            <div className="grid grid-cols-6 gap-1 sm:gap-3">
+                                {[6, 7, 8, 9, 10, 11].map((index) => {
+                                    const caseObj = game.board.getCase(index);
+                                    const clickable = isClickable(index);
+                                    
+                                    return (
+                                        <div
+                                            key={index}
+                                            onClick={() => clickable && handleCaseClick(index)}
+                                            className={`
+                                                ${getCaseColor(caseObj)}
+                                                rounded-lg p-2 sm:p-4 case-mobile aspect-square flex flex-col items-center justify-center
+                                                border-2 sm:border-4 border-white/30 shadow-lg
+                                                transition-all duration-200
+                                                ${clickable ? 'cursor-pointer hover:scale-105 active:scale-95' : 'opacity-70'}
+                                            `}
+                                        >
+                                            <div className="text-xl sm:text-3xl font-bold text-white mb-0 sm:mb-1">
+                                                {caseObj.pions}
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-0.5 sm:gap-1">
+                                                {[...Array(Math.min(4, caseObj.pions))].map((_, i) => (
+                                                    <div key={i} className="w-2 h-2 sm:w-3 sm:h-3 pion-mobile bg-white rounded-full shadow"></div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Current Player */}
+                        <div className="mt-4 sm:mt-6 text-center">
+                            <div className="inline-block bg-white/20 backdrop-blur-md rounded-full px-4 sm:px-8 py-2 sm:py-4 border border-white/30">
+                                <div className="text-sm sm:text-xl text-white">
+                                    ► Au tour de <span className={`font-bold ${
+                                        game.currentPlayer.color === 'YELLOW' ? 'text-yellow-300' : 'text-red-300'
+                                    }`}>
+                                        {game.currentPlayer.name}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Controls */}
+                        <div className="mt-4 sm:mt-6 flex flex-wrap justify-center gap-2 sm:gap-4">
+                            <button
+                                onClick={resetGame}
+                                className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold py-2 px-4 sm:py-3 sm:px-8 rounded-full shadow-lg transition-all text-sm sm:text-base"
+                            >
+                                🔄 Nouvelle Partie
+                            </button>
+                            
+                            <button
+                                onClick={handleUndo}
+                                disabled={game.moveHistory.length === 0}
+                                className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-bold py-2 px-4 sm:py-3 sm:px-8 rounded-full shadow-lg transition-all disabled:opacity-50 text-sm sm:text-base"
+                            >
+                                ⏮️ Annuler
+                            </button>
+                        </div>
+
+                        {/* Stats */}
+                        <div className="mt-4 sm:mt-6 bg-white/10 backdrop-blur-md rounded-xl p-4 sm:p-6 border border-white/20">
+                            <h3 className="text-lg sm:text-2xl font-bold text-white mb-3 sm:mb-4">
+                                📊 Statistiques
+                            </h3>
+                            <div className="grid grid-cols-3 gap-3 sm:gap-6">
+                                <div className="text-center bg-yellow-400/20 p-2 sm:p-4 rounded-lg">
+                                    <div className="text-xl sm:text-3xl font-bold text-yellow-300">
+                                        {stats.player1Wins}
+                                    </div>
+                                    <div className="text-xs sm:text-sm text-yellow-200">Victoires J1</div>
+                                </div>
+                                <div className="text-center bg-blue-400/20 p-2 sm:p-4 rounded-lg">
+                                    <div className="text-xl sm:text-3xl font-bold text-blue-300">
+                                        {stats.totalGames}
+                                    </div>
+                                    <div className="text-xs sm:text-sm text-blue-200">Parties</div>
+                                </div>
+                                <div className="text-center bg-red-400/20 p-2 sm:p-4 rounded-lg">
+                                    <div className="text-xl sm:text-3xl font-bold text-red-300">
+                                        {stats.player2Wins}
+                                    </div>
+                                    <div className="text-xs sm:text-sm text-red-200">Victoires J2</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Rules */}
+                        <div className="mt-4 sm:mt-8 bg-white/10 backdrop-blur-md rounded-xl p-4 sm:p-6 border border-white/20">
+                            <h3 className="text-lg sm:text-2xl font-bold text-white mb-3 sm:mb-4">
+                                📜 Règles
+                            </h3>
+                            <ul className="text-blue-100 space-y-1 sm:space-y-2 text-xs sm:text-sm">
+                                <li>• Cliquez sur une case de votre ligne</li>
+                                <li>• Distribuer les pions de gauche à droite</li>
+                                <li>• Capturez 4 pions pour continuer</li>
+                                <li>• Gagnez en conquérant toutes les cases</li>
+                            </ul>
+                        </div>
+
+                        {/* Footer */}
+                        <div className="mt-6 text-center text-white/60 text-xs sm:text-sm">
+                            <p>Créé avec ❤️ | Version Mobile 1.0</p>
+                            <p className="mt-1">
+                                <a href="https://github.com/VOTRE-USERNAME/kongane-master" 
+                                   className="text-blue-300 hover:text-blue-200"
+                                   target="_blank">
+                                    Code source sur GitHub
+                                </a>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<KonganeMaster />);
+    </script>
+</body>
+</html>
